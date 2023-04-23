@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, env, fs, io, path::Path, ptr};
+use std::{collections::HashMap, env, fs, io, path::Path, ptr, time::Instant};
 
 #[derive(Debug, Eq, Hash, Clone, Serialize, Deserialize)]
 struct File {
@@ -33,6 +33,7 @@ struct Duplicate<'a> {
 }
 
 fn main() -> io::Result<()> {
+    let start_all = Instant::now();
     let args: Vec<String> = env::args().collect();
 
     if args.len() < 2 || args.len() > 3 {
@@ -43,40 +44,67 @@ fn main() -> io::Result<()> {
     for arg in args.iter().skip(1) {
         let dir = Path::new(arg);
         let mut files: Vec<File> = Vec::new();
+        let now = Instant::now();
         if let Err(e) = walk_dir(dir, &mut files) {
             panic!("Couldn't read directory. Error: {}", e);
         } else {
             dirs.push(Dir::new(arg.to_string(), files));
         }
+        let elapsed = now.elapsed();
+        println!("Dir walker time: {:.2?}, dir: {}", elapsed, arg);
     }
 
     if dirs.len() == 0 {
         eprintln!("No dirs found");
     } else {
+        let now = Instant::now();
+
         let duplicates2 = find_duplicates(&dirs[0].files, &dirs[dirs.len() - 1].files);
+
+        let elapsed = now.elapsed();
+        println!("Duplicate finder time: {:.2?}", elapsed);
+
         let serialized = serde_json::to_string_pretty(&duplicates2)?;
-        println!("{:}", serialized);
+
+        println!("First folder total duplicates: {:?}", duplicates2.len());
+        println!(
+            "Second folder total duplicates: {:?}",
+            duplicates2
+                .iter()
+                .fold(0, |acc, dup| acc + dup.second_dir_match.len())
+        );
 
         let output_file = "./duplicates.json";
         fs::write(output_file, serialized)?; // return
     };
 
+    let elapsed = start_all.elapsed();
+    println!("Total time: {:.2?}", elapsed);
     Ok(())
 }
 
-fn walk_dir(dir: &Path, files: &mut Vec<File>) -> Result<(), std::io::Error> {
-    for entry in fs::read_dir(dir)? {
+fn walk_dir(dir: &Path, files: &mut Vec<File>) -> io::Result<()> {
+    let entries = fs::read_dir(dir);
+    if let Err(e) = entries {
+            eprintln!("Err {:?}, Dir {:?}", e, dir);
+            return Ok(());
+    }
+    for entry in entries? {
         let entry = entry?;
         let path = entry.path();
-        let metadata = fs::metadata(&path)?;
 
-        if metadata.is_dir() {
+        if entry.file_type()?.is_dir() {
             walk_dir(&path, files)?;
         } else {
+            let size = entry.metadata()?.len();
+            //let size = 0;
             files.push(File {
-                name: String::from(entry.file_name().to_str().unwrap()),
-                path: String::from(path.to_str().unwrap()),
-                size: metadata.len(),
+                name: entry
+                    .file_name()
+                    .into_string()
+                    .expect("Invalid Unicode data"),
+                path: path.to_str().expect("Invalid Unicode data").to_string(),
+                size,
             });
         }
     }
