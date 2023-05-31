@@ -34,14 +34,16 @@ struct Duplicate<'a> {
 
 fn main() -> io::Result<()> {
     let start_all = Instant::now();
-    let args: Vec<String> = env::args().collect();
+    let args: Vec<String> = env::args().skip(1).collect();
 
-    if args.len() < 2 || args.len() > 3 {
+    if args.len() < 1 {
         panic!("Provide 1 or 2 arguments...");
     }
 
     let mut dirs: Vec<Dir> = Vec::new();
-    for arg in args.iter().skip(1) {
+    //for arg in args.iter().skip(1) {
+    for arg in args.iter() {
+        // only 2 no need to iter all
         let dir = Path::new(arg);
         let mut files: Vec<File> = Vec::new();
         let now = Instant::now();
@@ -86,8 +88,8 @@ fn main() -> io::Result<()> {
 fn walk_dir(dir: &Path, files: &mut Vec<File>) -> io::Result<()> {
     let entries = fs::read_dir(dir);
     if let Err(e) = entries {
-            eprintln!("Err {:?}, Dir {:?}", e, dir);
-            return Ok(());
+        eprintln!("Err {:?}, Dir {:?}", e, dir);
+        return Ok(());
     }
     for entry in entries? {
         let entry = entry?;
