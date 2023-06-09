@@ -1,5 +1,13 @@
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, env, fs, io, path::Path, ptr, time::Instant};
+use std::{
+    collections::HashMap,
+    env,
+    fs::{self, read_dir},
+    io,
+    path::{Path, PathBuf},
+    ptr,
+    time::Instant,
+};
 
 #[derive(Debug, Eq, Hash, Clone, Serialize, Deserialize)]
 struct File {
@@ -25,43 +33,182 @@ impl Dir {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 struct Duplicate<'a> {
     file_name: &'a str,
     first_dir_match: &'a str,
     second_dir_match: Vec<String>,
 }
 
-fn main() -> io::Result<()> {
-    let start_all = Instant::now();
-    let args: Vec<String> = env::args().skip(1).collect();
+fn parse_args() -> Result<Vec<PathBuf>, String> {
+    let args: Vec<String> = env::args().skip(1).take(2).collect();
 
-    if args.len() < 1 {
-        panic!("Provide 1 or 2 arguments...");
+    if args.is_empty() {
+        //panic!("Provide 1 or 2 arguments...");
+        return Err("Provide 1 or 2 arguments...".into());
     }
 
-    let mut dirs: Vec<Dir> = Vec::new();
-    //for arg in args.iter().skip(1) {
-    for arg in args.iter() {
-        // only 2 no need to iter all
-        let dir = Path::new(arg);
-        let mut files: Vec<File> = Vec::new();
-        let now = Instant::now();
-        if let Err(e) = walk_dir(dir, &mut files) {
-            panic!("Couldn't read directory. Error: {}", e);
-        } else {
-            dirs.push(Dir::new(arg.to_string(), files));
+    args.into_iter()
+        .map(|arg| {
+            let p = PathBuf::from(arg);
+            if !p.exists() {
+                Err(format!("Path does not exist: {}", p.display()))
+            } else if !p.is_dir() {
+                Err(format!("Path is not a dir: {}", p.display()))
+            } else {
+                Ok(p)
+            }
+        })
+        .collect()
+}
+
+fn read_dirs(paths: Vec<PathBuf>) -> Result<Vec<Dir>, String> {
+    //let mut dirs: Vec<Dir> = Vec::new();
+    //for arg in args.iter().skip(1)
+    //for path in paths.iter() {
+    //}
+    paths
+        .into_iter()
+        .map(|path| {
+            //let dir = Path::new(path);
+            let mut files: Vec<File> = Vec::new();
+            //let now = Instant::now();
+            if let Err(e) = walk_dir(&path, &mut files) {
+                Err(format!(
+                    "Couldn't read directory: {}. Error: {}",
+                    path.display(),
+                    e
+                ))
+            } else {
+                //dirs.push(Dir::new(path.display().to_string(), files)); // could improve? to_string
+                //let elapsed = now.elapsed();
+                //println!("Dir walker time: {:.2?}, dir: {}", elapsed, path.display());
+                // check files empty?
+                Ok(Dir::new(path.display().to_string(), files)) // could improve? to_string
+            }
+        })
+        .collect()
+}
+
+fn walk_dir(dir: &Path, files: &mut Vec<File>) -> Result<(), Box<dyn std::error::Error>> {
+    let entries = fs::read_dir(dir);
+    // just testing
+    //if let Err(e) = entries {
+    //    eprintln!("Err {:?}, Dir {:?}", e, dir);
+    //    return Ok(());
+    //}
+    let entries = match entries {
+        Ok(entries) => entries,
+        Err(e) => {
+            eprintln!("Err {:?}, Dir {:?}", e, dir);
+            return Ok(());
         }
-        let elapsed = now.elapsed();
-        println!("Dir walker time: {:.2?}, dir: {}", elapsed, arg);
+    };
+    for entry in entries {
+        //let entry = entry?;
+        if let Ok(entry) = entry {
+            let path = entry.path();
+
+            if let Ok(file_type) = entry.file_type() {
+                if file_type.is_dir() {
+                    //println!("{:?}", entry);
+                    walk_dir(&path, files)?;
+                } else {
+                    // metadata...unwrap? with default value instead
+                    let size = match entry.metadata() {
+                        Ok(metadata) => metadata.len(),
+                        Err(e) => {
+                            eprintln!("Metadata size err: {}", e);
+                            0
+                        }
+                    };
+                    //let size = match std::fs::metadata(entry.path()) {
+                    //    Ok(metadata) => metadata.len(),
+                    //    Err(e) => {
+                    //        eprintln!("Metadata size err: {}", e);
+                    //        0
+                    //    }
+                    //};
+                    //let size = std::fs::metadata(entry.path())?.len();
+                    //std::fs::metadata(entry.path());
+                    //let size = 0;
+                    if entry.file_name() == "tap.lua" {
+                        println!("{:?}", path);
+                    }
+                    files.push(File {
+                        name: entry
+                            .file_name()
+                            .into_string()
+                            .expect("Invalid Unicode data"),
+                        path: path.to_str().expect("Invalid Unicode data").to_string(),
+                        size,
+                    });
+                }
+            }
+        }
     }
+
+    Ok(())
+}
+
+fn find_duplicates<'a>(files1: &'a Vec<File>, files2: &'a Vec<File>) -> Vec<Duplicate<'a>> {
+    let mut matches: HashMap<String, Duplicate> = if !ptr::eq(files1, files2) {
+        files1
+            .into_iter()
+            .map(|file| {
+                (
+                    file.name.clone(),
+                    Duplicate {
+                        file_name: &file.name,
+                        first_dir_match: &file.path,
+                        second_dir_match: Vec::new(),
+                    },
+                )
+            })
+            .collect()
+    } else {
+        HashMap::new()
+    };
+
+    for file in files2 {
+        match matches.get_mut(&file.name) {
+            Some(dups) => dups.second_dir_match.push(file.path.clone()),
+            None => {
+                matches.insert(
+                    file.name.clone(),
+                    Duplicate {
+                        file_name: &file.name,
+                        first_dir_match: &file.path,
+                        second_dir_match: Vec::new(),
+                    },
+                );
+            }
+        }
+    }
+
+    matches
+        .into_values()
+        .filter(|m| !m.second_dir_match.is_empty())
+        .collect()
+}
+
+fn entry() -> Result<(), Box<dyn std::error::Error>> {
+    let start_all = Instant::now();
+
+    let paths = parse_args()?;
+
+    let now = Instant::now();
+    let dirs = read_dirs(paths)?;
+    let elapsed = now.elapsed();
+    println!("Dir walker time: {:.2?}", elapsed);
 
     if dirs.len() == 0 {
-        eprintln!("No dirs found");
+        // unnecessary?
+        return Err("No dirs found".into());
     } else {
         let now = Instant::now();
 
-        let duplicates2 = find_duplicates(&dirs[0].files, &dirs[dirs.len() - 1].files);
+        let duplicates2 = find_duplicates(&dirs[0].files, &dirs.get(1).unwrap_or(&dirs[0]).files);
 
         let elapsed = now.elapsed();
         println!("Duplicate finder time: {:.2?}", elapsed);
@@ -85,71 +232,9 @@ fn main() -> io::Result<()> {
     Ok(())
 }
 
-fn walk_dir(dir: &Path, files: &mut Vec<File>) -> io::Result<()> {
-    let entries = fs::read_dir(dir);
-    if let Err(e) = entries {
-        eprintln!("Err {:?}, Dir {:?}", e, dir);
-        return Ok(());
+fn main() {
+    match entry() {
+        Ok(()) => (),
+        Err(e) => eprintln!("error: {}", e),
     }
-    for entry in entries? {
-        let entry = entry?;
-        let path = entry.path();
-
-        if entry.file_type()?.is_dir() {
-            walk_dir(&path, files)?;
-        } else {
-            let size = entry.metadata()?.len();
-            //let size = 0;
-            files.push(File {
-                name: entry
-                    .file_name()
-                    .into_string()
-                    .expect("Invalid Unicode data"),
-                path: path.to_str().expect("Invalid Unicode data").to_string(),
-                size,
-            });
-        }
-    }
-
-    Ok(())
-}
-
-fn find_duplicates<'a>(files1: &'a Vec<File>, files2: &'a Vec<File>) -> Vec<Duplicate<'a>> {
-    let mut matches: HashMap<&String, Duplicate> = if !ptr::eq(files1, files2) {
-        files1
-            .into_iter()
-            .map(|file| {
-                (
-                    &file.name,
-                    Duplicate {
-                        file_name: &file.name,
-                        first_dir_match: &file.path,
-                        second_dir_match: Vec::new(),
-                    },
-                )
-            })
-            .collect()
-    } else {
-        HashMap::new()
-    };
-
-    for file in files2 {
-        if let Some(dups) = matches.get_mut(&file.name) {
-            dups.second_dir_match.push(file.path.clone());
-        } else {
-            matches.insert(
-                &file.name,
-                Duplicate {
-                    file_name: &file.name,
-                    first_dir_match: &file.path,
-                    second_dir_match: Vec::new(),
-                },
-            );
-        }
-    }
-
-    matches
-        .into_values()
-        .filter(|m| !m.second_dir_match.is_empty())
-        .collect()
 }
