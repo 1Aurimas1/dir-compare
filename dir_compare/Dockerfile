@@ -15,7 +15,7 @@ FROM debian:buster-slim
 
 WORKDIR /app
 
-COPY --from=builder /app_builder/target/release/dir_diff /app
+COPY --from=builder /app_builder/target/release/dir_compare /app
 
-ENTRYPOINT ["/app/dir_diff"]
-# CMD ["/usr/bin/sh", "/app/dir_diff"]
+ENTRYPOINT ["/app/dir_compare"]
+# CMD ["/usr/bin/sh", "/app/dir_compare"]

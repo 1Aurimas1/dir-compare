@@ -1,9 +1,9 @@
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
-    env,
+    env, fs,
     path::{Path, PathBuf},
-    ptr, fs,
+    ptr,
 };
 
 #[derive(Debug, Eq, Hash, Clone, Serialize, Deserialize)]
