@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useDeferredValue, useEffect, useRef, useState } from "react";
 import SearchBar from "./SearchBar";
 import Window from "./Window";
 import { BASE_URL } from "../constants/constants";
@@ -26,6 +26,15 @@ const initCompareWindow: CompareWindow = {
   content: "",
 };
 
+const KeyControls = {
+  PrevWindow1: "ArrowDown",
+  NextWindow1: "ArrowUp",
+  PrevWindow2: "ArrowLeft",
+  NextWindow2: "ArrowRight",
+};
+
+const inputBlockTime = 100;
+
 const CompareView = () => {
   const WS_URL = BASE_URL;
   const wsRef = useRef<WebSocket | null>(null);
@@ -34,6 +43,8 @@ const CompareView = () => {
   const [windows, setWindows] = useState<CompareWindow[]>(
     Array(2).fill(initCompareWindow),
   );
+
+  const isInputBlocked = useRef(false);
 
   useEffect(() => {
     const socket = new WebSocket(WS_URL);
@@ -63,8 +74,37 @@ const CompareView = () => {
       console.log(`[error]`);
     };
 
+    const handleKeyPress = (e: KeyboardEvent) => {
+      if (isInputBlocked.current) return;
+
+      switch (e.key) {
+        case KeyControls.PrevWindow1:
+          showPrevious(e, 0);
+          break;
+        case KeyControls.NextWindow1:
+          showNext(e, 0);
+          break;
+        case KeyControls.PrevWindow2:
+          showPrevious(e, 1);
+          break;
+        case KeyControls.NextWindow2:
+          showNext(e, 1);
+          break;
+        default:
+          break;
+      }
+
+      isInputBlocked.current = true;
+      setTimeout(() => {
+        isInputBlocked.current = false;
+      }, inputBlockTime);
+    };
+
+    window.addEventListener("keyup", handleKeyPress);
+
     return () => {
       socket.close();
+      window.removeEventListener("keyup", handleKeyPress);
     };
   }, []);
 
@@ -139,14 +179,20 @@ const CompareView = () => {
 
   }, [windows]);
 
-  const showPrevious = (e: React.MouseEvent<HTMLButtonElement>, id: number) => {
+  const showPrevious = (
+    e: React.MouseEvent<HTMLButtonElement> | KeyboardEvent,
+    id: number,
+  ) => {
     e.preventDefault();
     if (!wsRef.current) return;
 
     wsRef.current.send(`op:${Command.Prev};${id}`);
   };
 
-  const showNext = (e: React.MouseEvent<HTMLButtonElement>, id: number) => {
+  const showNext = (
+    e: React.MouseEvent<HTMLButtonElement> | KeyboardEvent,
+    id: number,
+  ) => {
     e.preventDefault();
     if (!wsRef.current) return;
 
