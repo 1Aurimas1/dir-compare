@@ -1,17 +1,48 @@
 import React, { useEffect, useRef, useState } from "react";
 import SearchBar from "./SearchBar";
 import Window from "./Window";
-import { BASE_URL, FileType } from "../constants/constants";
+import { BASE_URL } from "../constants/constants";
+import { CompareWindow, FileType } from "../shared/interfaces/CompareWindow";
+
+const Command = {
+  Search: "search",
+  Prev: "prev",
+  Next: "next",
+} as const;
+type Command = typeof Command[keyof typeof Command];
+
+interface Message {
+  file_type: string;
+  window_idx: number;
+  file_idx: number;
+  file_total: number;
+  content: ArrayBuffer;
+}
+
+const initCompareWindow: CompareWindow = {
+  fileIdx: -1,
+  fileTotal: 0,
+  fileType: FileType.Text,
+  content: "",
+};
 
 const CompareView = () => {
   const WS_URL = BASE_URL;
-  const [windows, setWindowsContent] = useState(["", ""]);
-  const [types, setTypes] = useState(["", ""]);
-  const [searchError, setSearchError] = useState("");
   const wsRef = useRef<WebSocket | null>(null);
+  const [searchError, setSearchError] = useState("");
+
+  const [windows, setWindows] = useState<CompareWindow[]>(
+    Array(2).fill(initCompareWindow),
+  );
 
   useEffect(() => {
     const socket = new WebSocket(WS_URL);
+    if (wsRef.current === null) {
+      wsRef.current = socket;
+    } else {
+      return;
+    }
+
     socket.onopen = function (e) {
       console.log("[open] Connection established");
     };
@@ -32,10 +63,6 @@ const CompareView = () => {
       console.log(`[error]`);
     };
 
-    if (wsRef.current === null) {
-      wsRef.current = socket;
-    }
-
     return () => {
       socket.close();
     };
@@ -44,65 +71,86 @@ const CompareView = () => {
   useEffect(() => {
     if (!wsRef.current) return;
 
+    function resultToString(
+      data: ArrayBuffer | string | null | undefined,
+    ): string {
+      //if (Array.isArray(data)) {
+      //  data = new Uint8Array(data).buffer;
+      //  const decoder = new TextDecoder("utf-8");
+      //  return decoder.decode(data);
+      //}
+
+      return typeof data === "string" ? data : "";
+    }
+
+    function processMessageData(e: ProgressEvent<FileReader>) {
+      const receivedMessage: Message = JSON.parse(
+        resultToString(e.target?.result),
+      );
+      const idx = receivedMessage.window_idx;
+
+      let newContent: string;
+      switch (receivedMessage.file_type) {
+        case FileType.Image:
+          if (
+            windows[idx].content !== "" &&
+            windows[idx].fileType === FileType.Image
+          ) {
+            URL.revokeObjectURL(windows[idx].content);
+          }
+          newContent = URL.createObjectURL(
+            new Blob([new Uint8Array(receivedMessage.content)]),
+          );
+          break;
+        case FileType.Text:
+          const data = new Uint8Array(receivedMessage.content).buffer;
+          const decoder = new TextDecoder("utf-8");
+          newContent = decoder.decode(data);
+          break;
+        default:
+          console.error("Unknown file type...");
+          return;
+      }
+
+      const updatedWindow = {
+        fileIdx: receivedMessage.file_idx,
+        fileTotal: receivedMessage.file_total,
+        fileType: receivedMessage.file_type,
+        content: newContent,
+      };
+
+      setWindows((prevWindows) => {
+        prevWindows[idx] = updatedWindow;
+        return [...prevWindows];
+      });
+    }
+
     wsRef.current.onmessage = function (event) {
       console.log(`[message] Data received from server`);
-      const data: Blob = event.data;
-      const content_blob = data.slice(4);
+      const messageData: Blob = event.data;
 
       const reader = new FileReader();
 
-      reader.onload = function () {
-        function resultToString(
-          data: ArrayBuffer | string | undefined,
-        ): string {
-          if (data instanceof ArrayBuffer) {
-            const decoder = new TextDecoder("utf-8");
-            return decoder.decode(data);
-          }
-          return typeof data === "string" ? data : "";
-        }
+      reader.onload = processMessageData;
 
-        const cmd = resultToString(reader.result?.slice(0, 4));
-        const type = cmd.slice(0, 3);
-        const idx = parseInt(cmd.slice(3, 4));
-
-        const content = resultToString(reader.result?.slice(4));
-
-        switch (type) {
-          case FileType.Image:
-            if (windows[idx] !== "" && types[idx] === FileType.Image) {
-              URL.revokeObjectURL(windows[idx]);
-            }
-            types[idx] = FileType.Image;
-            windows[idx] = URL.createObjectURL(content_blob);
-            break;
-          case FileType.Text:
-            types[idx] = FileType.Text;
-            windows[idx] = content;
-            break;
-          default:
-            console.error("Unknown file type");
-            break;
-        }
-        setTypes([...types]);
-        setWindowsContent([...windows]);
-      };
-      reader.readAsText(data);
+      // IDEA: read as array buf?
+      reader.readAsText(messageData);
     };
-  }, [windows, types]);
+
+  }, [windows]);
 
   const showPrevious = (e: React.MouseEvent<HTMLButtonElement>, id: number) => {
     e.preventDefault();
     if (!wsRef.current) return;
 
-    wsRef.current.send(`op:prev;${id}`);
+    wsRef.current.send(`op:${Command.Prev};${id}`);
   };
 
   const showNext = (e: React.MouseEvent<HTMLButtonElement>, id: number) => {
     e.preventDefault();
     if (!wsRef.current) return;
 
-    wsRef.current.send(`op:next;${id}`);
+    wsRef.current.send(`op:${Command.Next};${id}`);
   };
 
   const handleSearch = (e: React.FormEvent<HTMLFormElement>) => {
@@ -121,7 +169,7 @@ const CompareView = () => {
     }
     setSearchError("");
 
-    wsRef.current.send(`op:search;dir0:${dir0};dir1:${dir1};`);
+    wsRef.current.send(`op:${Command.Search};dir0:${dir0};dir1:${dir1};`);
   };
 
   return (
@@ -140,12 +188,11 @@ const CompareView = () => {
         </form>
       </div>
       <div className="flex">
-        {windows.map((item, index) => (
+        {windows.map((win, i) => (
           <Window
-            key={index}
-            id={index}
-            type={types[index]}
-            file={item}
+            key={i}
+            id={i}
+            data={win}
             showPrevious={showPrevious}
             showNext={showNext}
           />

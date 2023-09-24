@@ -1,5 +1,5 @@
 use core::time;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::{
     fs,
     io::{ErrorKind, Read, Write},
@@ -88,10 +88,7 @@ impl WebSocketFrame {
         let mut byte_idx = 0;
         let fin = (frame_data[byte_idx] & 0x80) != 0;
         let _rsv = frame_data[byte_idx] & 0x70;
-        let op_code = match OpCode::from_u8(frame_data[byte_idx] & 0x0F) {
-            Ok(code) => code,
-            Err(e) => return Err(e),
-        };
+        let op_code = OpCode::from_u8(frame_data[byte_idx] & 0x0F)?;
         byte_idx += 1;
 
         let mask = (frame_data[byte_idx] & 0x80) != 0;
@@ -119,9 +116,7 @@ impl WebSocketFrame {
             .iter()
             .skip(offset)
             .enumerate()
-            .map(|(i, x)| {
-                return x ^ masking_key[i % 4];
-            })
+            .map(|(i, x)| x ^ masking_key[i % 4])
             .collect();
 
         Ok(Self::new(fin, op_code, mask, *masking_key, unmasked_data))
@@ -150,7 +145,7 @@ impl WebSocketFrame {
         }
 
         bytes_to_send.extend(self.payload_data);
-        return bytes_to_send;
+        bytes_to_send
     }
 
     fn decode_payload_length(frame_data: &[u8], byte_idx: usize, byte_count: usize) -> u64 {
@@ -161,7 +156,7 @@ impl WebSocketFrame {
         for i in 0..byte_count {
             new_size |= (frame_data[i + byte_idx] as u64) << (total_bits - 8 * i);
         }
-        return new_size;
+        new_size
     }
 }
 
@@ -209,6 +204,15 @@ impl Command {
             _ => unreachable!(),
         }
     }
+}
+
+#[derive(Serialize)]
+struct Message {
+    file_type: String,
+    window_idx: usize,
+    file_idx: usize,
+    file_total: usize,
+    content: Vec<u8>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -301,6 +305,20 @@ impl CompareManager {
             .map(|win| win.get_updated_file())
             .collect()
     }
+
+    fn get_file_idxs(&mut self) -> Vec<usize> {
+        self.compare_windows
+            .iter_mut()
+            .map(|win| win.index)
+            .collect()
+    }
+
+    fn get_file_totals(&mut self) -> Vec<usize> {
+        self.compare_windows
+            .iter_mut()
+            .map(|win| win.files.len())
+            .collect()
+    }
 }
 
 fn perform_handshake(buf: &Vec<u8>, stream: &mut TcpStream) -> bool {
@@ -349,10 +367,7 @@ fn handle_message(
     stream: &mut TcpStream,
     compare_manager: &mut Option<CompareManager>,
 ) -> Result<(), String> {
-    let ws_frame = match WebSocketFrame::from_bytes(frame_data) {
-        Ok(frame) => frame,
-        Err(e) => return Err(e),
-    };
+    let ws_frame = WebSocketFrame::from_bytes(frame_data)?;
 
     match ws_frame.op_code {
         OpCode::Text | OpCode::Binary => {
@@ -398,6 +413,8 @@ fn handle_message(
 
             if let Some(ref mut cm) = compare_manager {
                 let files = cm.get_updated_files();
+                let file_idxs = cm.get_file_idxs();
+                let file_totals = cm.get_file_totals();
 
                 for (idx, file) in files.into_iter().enumerate() {
                     if let Some(f) = file {
@@ -410,16 +427,33 @@ fn handle_message(
                             } else {
                                 "txt"
                             };
-                        // could be improved?
-                        let mut message = format!("{}{}", file_type, idx).as_bytes().to_vec();
-                        message.extend(content);
-                        let ws_frame =
-                            WebSocketFrame::new(true, OpCode::Binary, false, [0u8; 4], message);
-                        let bytes_to_send = ws_frame.to_bytes();
 
-                        match stream.write(&bytes_to_send) {
-                            Ok(n) => println!("bytes responded: {n}"),
-                            Err(e) => eprintln!("response error: {e}"),
+                        let message = Message {
+                            file_type: file_type.into(),
+                            window_idx: idx,
+                            file_idx: file_idxs[idx],
+                            file_total: file_totals[idx],
+                            content,
+                        };
+                        match serde_json::to_vec(&message) {
+                            Ok(message) => {
+                                let ws_frame = WebSocketFrame::new(
+                                    true,
+                                    OpCode::Binary,
+                                    false,
+                                    [0u8; 4],
+                                    message,
+                                );
+                                let bytes_to_send = ws_frame.to_bytes();
+
+                                match stream.write(&bytes_to_send) {
+                                    Ok(n) => println!("bytes responded: {n}"),
+                                    Err(e) => eprintln!("response error: {e}"),
+                                };
+                            }
+                            Err(e) => {
+                                eprintln!("Message serialize error: {e}");
+                            }
                         };
                     }
                 }

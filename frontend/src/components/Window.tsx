@@ -1,23 +1,27 @@
 import React from "react";
-import { FileType } from "../constants/constants";
+import { CompareWindow, FileType } from "../shared/interfaces/CompareWindow";
 
-interface WindowProps {
+interface Props {
   id: number;
-  type: string;
-  file: string;
+  data: CompareWindow;
   showPrevious: (e: React.MouseEvent<HTMLButtonElement>, id: number) => void;
   showNext: (e: React.MouseEvent<HTMLButtonElement>, id: number) => void;
 }
 
-const Window = (props: WindowProps) => {
+const Window = (props: Props) => {
   return (
     <>
       <div className="w-1/2 p-4">
-        <h2 className="text-lg font-semibold">File {props.id + 1}</h2>
+        <div className="flex flex-row justify-between">
+          <h2 className="text-lg font-semibold">File {props.id + 1}</h2>
+          <div className="text-lg">
+            {`${props.data.fileIdx + 1}/${props.data.fileTotal}`}
+          </div>
+        </div>
         <div className="border border-gray-300 rounded p-4 h-64 overflow-auto">
-          {props.type === FileType.Image
-            ? <img src={props.file} alt="Image" />
-            : <p>{props.file}</p>}
+          {props.data.fileType === FileType.Image
+            ? <img src={props.data.content} alt="Image" />
+            : <p>{props.data.content}</p>}
         </div>
         <div className="flex justify-end mt-4">
           <button
