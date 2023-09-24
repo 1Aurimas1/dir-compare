@@ -201,7 +201,7 @@ impl Command {
             "search" => Command::Search(CompareDirs::parse(parts[1])),
             "next" => Command::Next(parts[1].parse::<usize>().unwrap()),
             "prev" => Command::Prev(parts[1].parse::<usize>().unwrap()),
-            _ => unreachable!(),
+            _ => unreachable!("Unknown command received"),
         }
     }
 }
@@ -238,7 +238,7 @@ impl CompareWindow {
     }
 
     fn change_index(&mut self, direction: isize) {
-        // implement wraparound?
+        // IDEA: implement wraparound?
         if 0 < self.index && direction < 0 {
             self.index -= 1;
             self.to_update = true;
@@ -362,106 +362,88 @@ fn perform_handshake(buf: &Vec<u8>, stream: &mut TcpStream) -> bool {
     }
 }
 
-fn handle_message(
-    frame_data: &[u8],
-    stream: &mut TcpStream,
-    compare_manager: &mut Option<CompareManager>,
-) -> Result<(), String> {
-    let ws_frame = WebSocketFrame::from_bytes(frame_data)?;
-
-    match ws_frame.op_code {
-        OpCode::Text | OpCode::Binary => {
-            let received_text = String::from_utf8_lossy(&ws_frame.payload_data);
-            println!("payload as text: {:?}", received_text);
-            let command = Command::parse(received_text.to_string());
-            match command {
-                Command::Search(dirs) => {
-                    let mut process_cmd = std::process::Command::new(DIR_COMPARE_PATH);
-                    let mut can_spawn_process = false;
-                    for dir in dirs.dirs.iter() {
-                        if let Some(d) = dir {
-                            process_cmd.arg(d);
-                            can_spawn_process = true;
-                        }
-                    }
-                    if !can_spawn_process {
-                        eprintln!("Not enough args received to start dir search");
-                    }
-
-                    match process_cmd.spawn() {
-                        Ok(mut child_proc) => {
-                            child_proc.wait().expect("Command wasn't running");
-                            // might read old file if process fails to search
-                            let dups_json = fs::read_to_string("./duplicates.json").unwrap();
-                            let duplicates = serde_json::from_str(&dups_json).unwrap();
-                            *compare_manager = Some(CompareManager::new(duplicates));
-                        }
-                        Err(e) => eprintln!("Process failed to start: {e}"),
-                    }
-                }
-                Command::Prev(idx) => {
-                    if let Some(ref mut cm) = compare_manager {
-                        cm.change_file(idx, -1);
-                    }
-                }
-                Command::Next(idx) => {
-                    if let Some(ref mut cm) = compare_manager {
-                        cm.change_file(idx, 1);
-                    }
-                }
-            };
-
-            if let Some(ref mut cm) = compare_manager {
-                let files = cm.get_updated_files();
-                let file_idxs = cm.get_file_idxs();
-                let file_totals = cm.get_file_totals();
-
-                for (idx, file) in files.into_iter().enumerate() {
-                    if let Some(f) = file {
-                        let content = fs::read(&f).unwrap();
-
-                        // lazy, temporary implementation
-                        let file_type =
-                            if f.ends_with(".png") || f.ends_with(".jpg") || f.ends_with(".bmp") {
-                                "img"
-                            } else {
-                                "txt"
-                            };
-
-                        let message = Message {
-                            file_type: file_type.into(),
-                            window_idx: idx,
-                            file_idx: file_idxs[idx],
-                            file_total: file_totals[idx],
-                            content,
-                        };
-                        match serde_json::to_vec(&message) {
-                            Ok(message) => {
-                                let ws_frame = WebSocketFrame::new(
-                                    true,
-                                    OpCode::Binary,
-                                    false,
-                                    [0u8; 4],
-                                    message,
-                                );
-                                let bytes_to_send = ws_frame.to_bytes();
-
-                                match stream.write(&bytes_to_send) {
-                                    Ok(n) => println!("bytes responded: {n}"),
-                                    Err(e) => eprintln!("response error: {e}"),
-                                };
-                            }
-                            Err(e) => {
-                                eprintln!("Message serialize error: {e}");
-                            }
-                        };
-                    }
+fn handle_message(message: String, compare_manager: &mut Option<CompareManager>) -> Vec<u8> {
+    println!("payload as text: {:?}", message);
+    let mut response = Vec::new();
+    let command = Command::parse(message);
+    match command {
+        Command::Search(dirs) => {
+            let mut process_cmd = std::process::Command::new(DIR_COMPARE_PATH);
+            let mut can_spawn_process = false;
+            for dir in dirs.dirs.iter() {
+                if let Some(d) = dir {
+                    process_cmd.arg(d);
+                    can_spawn_process = true;
                 }
             }
+            if !can_spawn_process {
+                eprintln!("Not enough args received to start dir search");
+            }
+
+            match process_cmd.spawn() {
+                Ok(mut child_proc) => {
+                    child_proc.wait().expect("Command wasn't running");
+                    // FIX: might read old file if process fails to search
+                    let dups_json = fs::read_to_string("./duplicates.json").unwrap();
+                    let duplicates = serde_json::from_str(&dups_json).unwrap();
+                    *compare_manager = Some(CompareManager::new(duplicates));
+                }
+                Err(e) => eprintln!("Process failed to start: {e}"),
+            }
         }
-        _ => todo!("Implement other frame type behavior"),
+        Command::Prev(idx) => {
+            if let Some(ref mut cm) = compare_manager {
+                cm.change_file(idx, -1);
+            }
+        }
+        Command::Next(idx) => {
+            if let Some(ref mut cm) = compare_manager {
+                cm.change_file(idx, 1);
+            }
+        }
+    };
+
+    if let Some(ref mut cm) = compare_manager {
+        let files = cm.get_updated_files();
+        let file_idxs = cm.get_file_idxs();
+        let file_totals = cm.get_file_totals();
+
+        for (idx, file) in files.into_iter().enumerate() {
+            if let Some(f) = file {
+                let content = fs::read(&f).unwrap();
+
+                // lazy, temporary implementation
+                let file_type = if f.ends_with(".png") || f.ends_with(".jpg") || f.ends_with(".bmp")
+                {
+                    "img"
+                } else {
+                    "txt"
+                };
+
+                let message = Message {
+                    file_type: file_type.into(),
+                    window_idx: idx,
+                    file_idx: file_idxs[idx],
+                    file_total: file_totals[idx],
+                    content,
+                };
+                match serde_json::to_vec(&message) {
+                    Ok(message) => {
+                        let ws_frame =
+                            WebSocketFrame::new(true, OpCode::Binary, false, [0u8; 4], message);
+                        let bytes_to_send = ws_frame.to_bytes();
+
+                        response.extend(bytes_to_send);
+                    }
+                    Err(e) => {
+                        eprintln!("Message serialize error: {e}");
+                    }
+                };
+            }
+        }
     }
-    Ok(())
+
+    return response;
 }
 
 fn handle_connection(mut stream: TcpStream) -> std::io::Result<()> {
@@ -485,7 +467,7 @@ fn handle_connection(mut stream: TcpStream) -> std::io::Result<()> {
                 break;
             }
             Ok(0) => {
-                eprintln!("No data received");
+                eprintln!("No stream data received");
                 break;
             }
             Ok(size) => {
@@ -493,9 +475,29 @@ fn handle_connection(mut stream: TcpStream) -> std::io::Result<()> {
                 if !did_handshake {
                     did_handshake = perform_handshake(&buf, &mut stream);
                 } else {
-                    if let Err(e) = handle_message(&buf[..size], &mut stream, &mut compare_manager)
-                    {
-                        eprintln!("{e}");
+                    let ws_frame = WebSocketFrame::from_bytes(&buf[..size]);
+                    match ws_frame {
+                        Ok(ws_frame) => {
+                            match ws_frame.op_code {
+                                OpCode::Text | OpCode::Binary => {
+                                    let received_text =
+                                        String::from_utf8_lossy(&ws_frame.payload_data).to_string();
+                                    let response =
+                                        handle_message(received_text, &mut compare_manager);
+
+                                    match stream.write(&response) {
+                                        Ok(n) => println!("bytes responded: {n}"),
+                                        Err(e) => eprintln!("response error: {e}"),
+                                    };
+                                }
+                                OpCode::Close => {
+                                    //did_handshake = false;
+                                    //compare_manager = None;
+                                }
+                                _ => todo!("Implement other frame type behavior"),
+                            }
+                        }
+                        Err(e) => eprintln!("{e}"),
                     }
                 }
             }
