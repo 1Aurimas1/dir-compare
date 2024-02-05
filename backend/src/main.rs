@@ -123,7 +123,6 @@ impl WebSocketFrame {
     }
 
     fn to_bytes(self) -> Vec<u8> {
-        // could preallocate?
         let mut bytes_to_send = vec![];
         bytes_to_send.push(((self.fin as u8) << 7) | self.op_code.to_u8());
 
@@ -140,8 +139,6 @@ impl WebSocketFrame {
 
         if self.mask {
             bytes_to_send.extend(self.masking_key);
-            // finish masking
-            todo!("Unfinished masking in to_bytes()");
         }
 
         bytes_to_send.extend(self.payload_data);
@@ -150,7 +147,6 @@ impl WebSocketFrame {
 
     fn decode_payload_length(frame_data: &[u8], byte_idx: usize, byte_count: usize) -> u64 {
         // most significant must be 0
-        // unnecessary? * 8
         let total_bits = byte_count * 8;
         let mut new_size = 0u64;
         for i in 0..byte_count {
@@ -238,7 +234,6 @@ impl CompareWindow {
     }
 
     fn change_index(&mut self, direction: isize) {
-        // IDEA: implement wraparound?
         if 0 < self.index && direction < 0 {
             self.index -= 1;
             self.to_update = true;
@@ -383,7 +378,6 @@ fn handle_message(message: String, compare_manager: &mut Option<CompareManager>)
             match process_cmd.spawn() {
                 Ok(mut child_proc) => {
                     child_proc.wait().expect("Command wasn't running");
-                    // FIX: might read old file if process fails to search
                     let dups_json = fs::read_to_string("./duplicates.json").unwrap();
                     let duplicates = serde_json::from_str(&dups_json).unwrap();
                     *compare_manager = Some(CompareManager::new(duplicates));
@@ -412,7 +406,6 @@ fn handle_message(message: String, compare_manager: &mut Option<CompareManager>)
             if let Some(f) = file {
                 let content = fs::read(&f).unwrap();
 
-                // lazy, temporary implementation
                 let file_type = if f.ends_with(".png") || f.ends_with(".jpg") || f.ends_with(".bmp")
                 {
                     "img"
@@ -491,8 +484,6 @@ fn handle_connection(mut stream: TcpStream) -> std::io::Result<()> {
                                     };
                                 }
                                 OpCode::Close => {
-                                    //did_handshake = false;
-                                    //compare_manager = None;
                                 }
                                 _ => todo!("Implement other frame type behavior"),
                             }

@@ -1,4 +1,4 @@
-import React, { useDeferredValue, useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import SearchBar from "./SearchBar";
 import Window from "./Window";
 import { BASE_URL } from "../constants/constants";
