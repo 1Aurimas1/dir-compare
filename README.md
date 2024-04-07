@@ -1,2 +1,3 @@
 # dir-compare
-This program is designed to compare two directories. It helps in finding duplicate files within the two directories.
+
+This program is designed to compare files in directories. It helps to find duplicate files within a single or two directories. App consists of three core parts: directory comparer, backend and frontend. Directory comparer is used as a CLI program which serves a key purpose of the app by searching for duplicates. Backend and frontend are necessary to provide a way for users to interact with application using GUI instead of CLI. Backend and comparer were implemented using **rust** language while frontend was built with **react.js**. To exchange data between back and front websocket protocol is used.
